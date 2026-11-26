@@ -1,0 +1,35 @@
+# Environnements et cache Python
+.venv/
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Donnees locales du projet (ne pas publier les 13 478 images)
+Banana Ripeness Classification Dataset/
+banana_dataset.zip
+notebooks/
+*.ipynb
+Microsoft/
+
+# Configurations locales et secrets
+.streamlit/secrets.toml
+.env
+.env.*
+!.env.example
+
+# Artefacts de travail non utilises par l'application publiee
+artifacts/*
+!artifacts/eda_summary.json
+!artifacts/image_results.json
+!artifacts/mastercard_metrics.json
+!artifacts/mastercard_validation.csv
+!artifacts/mastercard_forecast_20_sessions.csv
+!artifacts/mastercard_history.csv
+
+# Poids inutilises par l'inference de l'application
+models/*
+!models/image_metadata.json
+!models/image_model.pt
+!models/mastercard_neuralprophet.np

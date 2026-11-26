@@ -1,0 +1,8 @@
+{
+  "mae": 88.942626953125,
+  "rmse": 89.82188042382427,
+  "baseline_mae": 39.45249938964844,
+  "baseline_rmse": 41.310169971940816,
+  "horizon_sessions": 20,
+  "training_seconds": 56.71093468800018
+}

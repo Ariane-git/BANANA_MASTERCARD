@@ -1,0 +1,15 @@
+# Runtime deploiement (Python 3.11 recommande sur Streamlit Community Cloud)
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+streamlit==1.67.0
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+neuralprophet==0.9.0
+yfinance>=0.2.54,<1.0
+pandas-market-calendars>=4.6,<6.0
+pandas>=2.1,<3.0
+numpy>=1.26,<2.0
+pyarrow>=21,<26
+Pillow>=10.0,<12.0
+scikit-learn>=1.4,<2.0
+plotly>=5.24,<7.0

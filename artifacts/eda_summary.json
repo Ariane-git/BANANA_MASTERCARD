@@ -1,0 +1,35 @@
+{
+  "image_count": 13478,
+  "unreadable_count": 0,
+  "formats": {
+    ".jpg": 13478
+  },
+  "modes": {
+    "RGB": 13478
+  },
+  "dimensions": {
+    "416x416": 13478
+  },
+  "counts": {
+    "overripe": {
+      "test": 113,
+      "train": 2349,
+      "valid": 229
+    },
+    "ripe": {
+      "test": 154,
+      "train": 3522,
+      "valid": 339
+    },
+    "rotten": {
+      "test": 185,
+      "train": 4020,
+      "valid": 388
+    },
+    "unripe": {
+      "test": 110,
+      "train": 1902,
+      "valid": 167
+    }
+  }
+}
