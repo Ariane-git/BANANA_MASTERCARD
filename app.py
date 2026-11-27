@@ -42,8 +42,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+BRAND_LOGO = ROOT / "assets" / "banana_mastercard.svg"
 st.logo(
-    str(ROOT / "assets" / "banana_mastercard.svg"),
+    str(BRAND_LOGO) if BRAND_LOGO.is_file() else "🍌",
     size="large",
     icon_image=":material/analytics:",
 )
