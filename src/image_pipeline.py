@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image, ImageFile
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from torch import nn
@@ -22,8 +25,6 @@ BATCH_SIZE = 32
 CLASS_NAMES = ("overripe", "ripe", "rotten", "unripe")
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-BANANA_GATE_MIN_PROBABILITY = 0.05
-BANANA_GATE_TOP_K = 5
 ImageFile.LOAD_TRUNCATED_IMAGES = False
 
 
@@ -82,6 +83,150 @@ def make_loaders(root: Path | None = None, image_size: int = IMAGE_SIZE, num_wor
         "test": DataLoader(test_data, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers),
     }
     return train_data, valid_data, test_data, loaders
+
+
+# ---------------------------------------------------------------------------
+# Chargement rapide : les images sont lues UNE SEULE FOIS, redimensionnées, puis
+# gardées en mémoire (uint8). Chaque époque ne fait plus de décodage JPEG.
+# ---------------------------------------------------------------------------
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def _list_images(folder: Path):
+    return sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+
+
+def build_image_cache(root: Path, image_size: int, cache_path: Path) -> dict:
+    """Lit tout le dataset, redimensionne comme à l'inférence et sauvegarde un cache."""
+    root = Path(root)
+    resize = transforms.Resize((image_size, image_size))  # même redimensionnement que build_transforms
+    cache = {"classes": list(CLASS_NAMES), "image_size": image_size, "unreadable": []}
+
+    def load_one(path):
+        try:
+            with Image.open(path) as image:
+                image = resize(image.convert("RGB"))
+            return torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1).contiguous()
+        except Exception:
+            return None
+
+    for split in ("train", "valid", "test"):
+        paths, labels = [], []
+        for label, class_name in enumerate(CLASS_NAMES):
+            class_dir = root / split / class_name
+            if not class_dir.is_dir():
+                raise FileNotFoundError(f"Dossier de classe introuvable : {split}/{class_name}")
+            for path in _list_images(class_dir):
+                paths.append(path)
+                labels.append(label)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            tensors = list(pool.map(load_one, paths))
+        kept = [index for index, tensor in enumerate(tensors) if tensor is not None]
+        cache["unreadable"] += [str(paths[i].relative_to(root)) for i, t in enumerate(tensors) if t is None]
+        cache[split] = (
+            torch.stack([tensors[i] for i in kept]),
+            torch.tensor([labels[i] for i in kept], dtype=torch.long),
+        )
+        print(f"Cache {split} : {len(kept)} images lues")
+    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+    torch.save(cache, cache_path)
+    return cache
+
+
+def _subset_per_class(images, labels, per_class: int, seed: int = SEED):
+    """Garde au plus `per_class` images par classe (tirage reproductible) : test rapide."""
+    generator = torch.Generator().manual_seed(seed)
+    kept = []
+    for class_index in range(len(CLASS_NAMES)):
+        indices = (labels == class_index).nonzero().flatten()
+        kept.append(indices[torch.randperm(len(indices), generator=generator)[:per_class]])
+    kept = torch.cat(kept).sort().values
+    return images[kept], labels[kept]
+
+
+def _augment_batch(batch: torch.Tensor) -> torch.Tensor:
+    """Augmentation légère sur un lot dans [0, 1] : miroir, rotation ±10°, luminosité, contraste, saturation."""
+    count = batch.size(0)
+    flip = torch.rand(count) < 0.5
+    batch = torch.where(flip.view(-1, 1, 1, 1), batch.flip(3), batch)
+    angle = (torch.rand(count) * 2 - 1) * math.radians(10)
+    theta = torch.zeros(count, 2, 3)
+    theta[:, 0, 0], theta[:, 0, 1] = torch.cos(angle), -torch.sin(angle)
+    theta[:, 1, 0], theta[:, 1, 1] = torch.sin(angle), torch.cos(angle)
+    grid = F.affine_grid(theta, list(batch.shape), align_corners=False)
+    batch = F.grid_sample(batch, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
+    brightness = 1 + (torch.rand(count, 1, 1, 1) * 2 - 1) * 0.12
+    contrast = 1 + (torch.rand(count, 1, 1, 1) * 2 - 1) * 0.12
+    saturation = 1 + (torch.rand(count, 1, 1, 1) * 2 - 1) * 0.08
+    gray = (0.299 * batch[:, 0:1] + 0.587 * batch[:, 1:2] + 0.114 * batch[:, 2:3])
+    batch = (batch - gray) * saturation + gray
+    mean = batch.mean(dim=(1, 2, 3), keepdim=True)
+    batch = ((batch - mean) * contrast + mean) * brightness
+    return batch.clamp(0, 1)
+
+
+class CachedDataset:
+    """Images en mémoire (uint8) et étiquettes, avec les attributs utiles du notebook."""
+
+    def __init__(self, images: torch.Tensor, labels: torch.Tensor):
+        self.images = images
+        self.labels = labels
+        self.targets = labels.tolist()
+        self.classes = list(CLASS_NAMES)
+
+    def __len__(self):
+        return len(self.labels)
+
+
+class CachedLoader:
+    """Fournit des lots (images normalisées, étiquettes), comme un DataLoader."""
+
+    def __init__(self, dataset: CachedDataset, batch_size: int, shuffle: bool, augment: bool):
+        self.dataset, self.batch_size, self.shuffle, self.augment = dataset, batch_size, shuffle, augment
+        self.mean = torch.tensor(IMAGENET_MEAN).view(1, 3, 1, 1)
+        self.std = torch.tensor(IMAGENET_STD).view(1, 3, 1, 1)
+
+    def __len__(self):
+        return math.ceil(len(self.dataset) / self.batch_size)
+
+    def __iter__(self):
+        count = len(self.dataset)
+        order = torch.randperm(count) if self.shuffle else torch.arange(count)
+        for start in range(0, count, self.batch_size):
+            indices = order[start:start + self.batch_size]
+            batch = self.dataset.images[indices].float() / 255.0
+            if self.augment:
+                batch = _augment_batch(batch)
+            yield (batch - self.mean) / self.std, self.dataset.labels[indices]
+
+
+def make_cached_loaders(root: Path | None = None, image_size: int = IMAGE_SIZE,
+                        cache_dir: Path | None = None, batch_size: int = BATCH_SIZE,
+                        subset_per_class: int | None = None):
+    """Charge (ou crée) le cache d'images, puis renvoie datasets et loaders prêts à l'emploi."""
+    root = Path(root or dataset_root())
+    cache_path = Path(cache_dir or project_root() / "cache") / f"images_{image_size}.pt"
+    if cache_path.exists():
+        cache = torch.load(cache_path, map_location="cpu", weights_only=True)
+        print(f"Cache chargé : {cache_path.name}")
+    else:
+        cache = build_image_cache(root, image_size, cache_path)
+    if cache["classes"] != list(CLASS_NAMES):
+        raise ValueError("Le cache ne correspond pas aux classes attendues : supprime le dossier cache.")
+    train_images, train_labels = cache["train"]
+    valid_images, valid_labels = cache["valid"]
+    if subset_per_class:
+        train_images, train_labels = _subset_per_class(train_images, train_labels, subset_per_class)
+        valid_images, valid_labels = _subset_per_class(valid_images, valid_labels, subset_per_class)
+    train_data = CachedDataset(train_images, train_labels)
+    valid_data = CachedDataset(valid_images, valid_labels)
+    test_data = CachedDataset(*cache["test"])
+    loaders = {
+        "train": CachedLoader(train_data, batch_size, shuffle=True, augment=True),
+        "valid": CachedLoader(valid_data, batch_size, shuffle=False, augment=False),
+        "test": CachedLoader(test_data, batch_size, shuffle=False, augment=False),
+    }
+    return train_data, valid_data, test_data, loaders, cache["unreadable"]
 
 
 class BananaCNN(nn.Module):
@@ -244,36 +389,6 @@ def save_json(data, path: Path):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_banana_guard(project: Path | None = None, device: str = "cpu"):
-    """Load a lightweight ImageNet classifier used to reject obvious non-banana images."""
-    project = Path(project or project_root())
-    weights_path = project / "models" / "banana_gate_mobilenet_v3_small.pth"
-    if not weights_path.is_file():
-        raise FileNotFoundError(
-            "Détecteur banane absent : ajoute models/banana_gate_mobilenet_v3_small.pth au dépôt."
-        )
-    weights = models.MobileNet_V3_Small_Weights.DEFAULT
-    detector = models.mobilenet_v3_small(weights=None)
-    detector.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
-    detector.to(device).eval()
-    banana_index = weights.meta["categories"].index("banana")
-    return detector, weights.transforms(), banana_index, weights.meta["categories"]
-
-
-def check_banana_image(image: Image.Image, detector, image_transform, banana_index: int, categories, device="cpu"):
-    """Gate the ripeness classifier using the ImageNet banana class."""
-    tensor = image.convert("RGB")
-    tensor = image_transform(tensor).unsqueeze(0).to(device)
-    with torch.inference_mode():
-        logits = detector(tensor)[0]
-        probabilities = torch.softmax(logits, dim=0)
-    banana_probability = float(probabilities[banana_index].cpu())
-    banana_rank = int((logits > logits[banana_index]).sum().item()) + 1
-    top_category = categories[int(logits.argmax().item())]
-    accepted = banana_probability >= BANANA_GATE_MIN_PROBABILITY and banana_rank <= BANANA_GATE_TOP_K
-    return accepted, banana_probability, top_category, banana_rank
-
-
 def load_image_model(project: Path | None = None, device: str = "cpu"):
     project = Path(project or project_root())
     metadata_path = project / "models" / "image_metadata.json"
@@ -298,3 +413,28 @@ def predict_pil_image(image: Image.Image, model, metadata, image_transform, devi
     with torch.inference_mode():
         probabilities = torch.softmax(model(tensor), dim=1)[0].cpu().numpy()
     return metadata["classes"][int(probabilities.argmax())], probabilities
+
+
+# ---------------------------------------------------------------------------
+# Garde-fou de l'application : vérifie qu'une photo contient bien une banane
+# (MobileNetV3 pré-entraîné sur ImageNet) avant de prédire la maturité.
+# ---------------------------------------------------------------------------
+def load_banana_guard(project: Path | None = None, device: str = "cpu"):
+    """Charge MobileNetV3 (ImageNet) et renvoie (modèle, prétraitement, indice « banana », catégories)."""
+    weights = models.MobileNet_V3_Large_Weights.DEFAULT
+    detector = models.mobilenet_v3_large(weights=weights).to(device).eval()
+    categories = list(weights.meta["categories"])
+    return detector, weights.transforms(), categories.index("banana"), categories
+
+
+def check_banana_image(image: Image.Image, detector, detector_transform, banana_index: int, categories,
+                       top_k: int = 5, min_score: float = 0.05):
+    """Renvoie (est_banane, score_banane, catégorie_dominante, rang_banane) ; acceptée si top_k et score minimal."""
+    device = next(detector.parameters()).device
+    tensor = detector_transform(image.convert("RGB")).unsqueeze(0).to(device)
+    with torch.inference_mode():
+        probabilities = torch.softmax(detector(tensor), dim=1)[0].cpu()
+    order = probabilities.argsort(descending=True)
+    rank = int((order == banana_index).nonzero().item()) + 1
+    score = float(probabilities[banana_index])
+    return (rank <= top_k and score >= min_score), score, categories[int(order[0])], rank
