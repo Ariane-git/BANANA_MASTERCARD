@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -110,4 +111,16 @@ def load_model(models_dir: Path):
     path = Path(models_dir) / "mastercard_neuralprophet.np"
     if not path.exists():
         raise FileNotFoundError("Modèle boursier absent : exécute d'abord le notebook 02.")
-    return load_neuralprophet(str(path), map_location="cpu")
+    model = load_neuralprophet(str(path), map_location="cpu")
+
+    # A model exported from Colab may keep its TensorBoard logger under /content.
+    # Prediction needs no training metrics, so disable that logger and use a
+    # writable local temp directory when rebuilding the Lightning trainer.
+    model.metrics = {}
+    model.metrics_logger = None
+    model.trainer_config = {
+        **(model.trainer_config or {}),
+        "default_root_dir": str(Path(tempfile.gettempdir()) / "banana_mastercard_neuralprophet"),
+    }
+    model.restore_trainer(accelerator="cpu")
+    return model
