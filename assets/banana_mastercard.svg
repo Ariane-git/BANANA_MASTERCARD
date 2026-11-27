@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="112" viewBox="0 0 560 112" role="img" aria-labelledby="title desc">
+  <title id="title">Banana and Mastercard</title>
+  <desc id="desc">Banana yellow fruit mark and Mastercard red and orange circles beside the project name.</desc>
+  <path d="M25 70C42 23 81 17 115 32c-7 5-13 10-19 18-17-5-36 3-52 27-6 9-11 19-15 29-8-9-11-22-4-36Z" fill="#F4C542"/>
+  <path d="M31 96c20-40 49-58 78-54-20 14-36 31-48 51-8 13-17 19-30 15Z" fill="#F79E1B"/>
+  <circle cx="149" cy="48" r="26" fill="#EB001B"/>
+  <circle cx="181" cy="48" r="26" fill="#F79E1B" fill-opacity=".96"/>
+  <text x="220" y="48" fill="#FFF7E8" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" letter-spacing="1.5">BANANA</text>
+  <text x="220" y="83" fill="#FFD34E" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600" letter-spacing="2">× MASTERCARD</text>
+</svg>
