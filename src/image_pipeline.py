@@ -22,6 +22,8 @@ BATCH_SIZE = 32
 CLASS_NAMES = ("overripe", "ripe", "rotten", "unripe")
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+BANANA_GATE_MIN_PROBABILITY = 0.05
+BANANA_GATE_TOP_K = 5
 ImageFile.LOAD_TRUNCATED_IMAGES = False
 
 
@@ -240,6 +242,36 @@ def save_json(data, path: Path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_banana_guard(project: Path | None = None, device: str = "cpu"):
+    """Load a lightweight ImageNet classifier used to reject obvious non-banana images."""
+    project = Path(project or project_root())
+    weights_path = project / "models" / "banana_gate_mobilenet_v3_small.pth"
+    if not weights_path.is_file():
+        raise FileNotFoundError(
+            "Détecteur banane absent : ajoute models/banana_gate_mobilenet_v3_small.pth au dépôt."
+        )
+    weights = models.MobileNet_V3_Small_Weights.DEFAULT
+    detector = models.mobilenet_v3_small(weights=None)
+    detector.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
+    detector.to(device).eval()
+    banana_index = weights.meta["categories"].index("banana")
+    return detector, weights.transforms(), banana_index, weights.meta["categories"]
+
+
+def check_banana_image(image: Image.Image, detector, image_transform, banana_index: int, categories, device="cpu"):
+    """Gate the ripeness classifier using the ImageNet banana class."""
+    tensor = image.convert("RGB")
+    tensor = image_transform(tensor).unsqueeze(0).to(device)
+    with torch.inference_mode():
+        logits = detector(tensor)[0]
+        probabilities = torch.softmax(logits, dim=0)
+    banana_probability = float(probabilities[banana_index].cpu())
+    banana_rank = int((logits > logits[banana_index]).sum().item()) + 1
+    top_category = categories[int(logits.argmax().item())]
+    accepted = banana_probability >= BANANA_GATE_MIN_PROBABILITY and banana_rank <= BANANA_GATE_TOP_K
+    return accepted, banana_probability, top_category, banana_rank
 
 
 def load_image_model(project: Path | None = None, device: str = "cpu"):

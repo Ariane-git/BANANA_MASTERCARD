@@ -33,3 +33,4 @@ models/*
 !models/image_metadata.json
 !models/image_model.pt
 !models/mastercard_neuralprophet.np
+!models/banana_gate_mobilenet_v3_small.pth

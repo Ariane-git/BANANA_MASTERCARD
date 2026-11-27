@@ -8,11 +8,13 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageOps
 
 from src.image_pipeline import (
     CLASS_NAMES,
+    check_banana_image,
     dataset_root,
+    load_banana_guard,
     load_image_model,
     predict_pil_image,
     project_root,
@@ -107,6 +109,11 @@ def inspect_dataset():
 @st.cache_resource(show_spinner="Chargement du modèle image…")
 def get_image_model():
     return load_image_model(ROOT, "cpu")
+
+
+@st.cache_resource(show_spinner="Vérification que la photo contient une banane…")
+def get_banana_guard():
+    return load_banana_guard(ROOT, "cpu")
 
 
 @st.cache_resource(show_spinner="Chargement du modèle NeuralProphet…")
@@ -392,35 +399,49 @@ def show_exploration():
 
 
 def show_image_module():
-    section_header("Vision par ordinateur · étape 02", "Reconnaissance de maturité", "Charge une photo de banane. Le modèle retenu dans Colab et ses classes sont lus depuis le dossier models/.", icon=":material/image_search:")
+    section_header("Vision par ordinateur · étape 02", "Reconnaissance de maturité", "Une vérification détecte d’abord si l’image contient une banane. Le modèle de maturité ne s’exécute que si cette vérification passe.", icon=":material/image_search:")
     model_path = MODELS_DIR / "image_model.pt"
     metadata_path = MODELS_DIR / "image_metadata.json"
     if not model_path.is_file() or not metadata_path.is_file():
         st.error("Modèle image manquant. Place image_model.pt et image_metadata.json dans models/.")
         return
-    upload = st.file_uploader("Importer une image", type=["jpg", "jpeg", "png", "webp"], help="Formats pris en charge : JPG, PNG, WEBP.")
+    st.caption("MobileNetV3 vérifie la présence d’une banane avec ImageNet. La photo n’est acceptée que si « banana » apparaît dans les 5 premiers résultats avec un score d’au moins 5 %.")
+    upload = st.file_uploader("Importer une photo de banane", type=["jpg", "jpeg", "png", "webp"], help="Formats pris en charge : JPG, PNG, WEBP. Cadre la banane assez près et utilise un éclairage correct.")
     if upload:
         try:
-            image = Image.open(upload).convert("RGB")
-            model, metadata, image_transform = get_image_model()
-            label, probabilities = predict_pil_image(image, model, metadata, image_transform)
+            image = ImageOps.exif_transpose(Image.open(upload)).convert("RGB")
             photo, prediction = st.columns([1, 1.2])
             with photo:
-                st.image(image, caption="Aperçu", width="stretch", alt="Image de banane importée pour la classification")
+                st.image(image, caption="Image importée", width="stretch", alt="Photo importée avant la vérification de présence d’une banane")
+            detector, detector_transform, banana_index, categories = get_banana_guard()
+            is_banana, banana_score, top_category, banana_rank = check_banana_image(
+                image, detector, detector_transform, banana_index, categories
+            )
             with prediction:
-                st.subheader("Prédiction du modèle")
-                st.metric("Classe estimée", label)
-                st.metric("Confiance du modèle", f"{probabilities.max():.1%}")
-                prob_fig = go.Figure(go.Bar(
-                    x=probabilities * 100,
-                    y=metadata["classes"],
-                    orientation="h",
-                    marker_color=[BANANA if name == label else "#b9c6d2" for name in metadata["classes"]],
-                    text=[f"{value:.1f}%" for value in probabilities * 100],
-                    textposition="outside",
-                ))
-                prob_fig.update_layout(title="Probabilités par classe", xaxis_title="Probabilité (%)", yaxis_title="", xaxis_range=[0, 110])
-                st.plotly_chart(chart_layout(prob_fig, 280), width="stretch", alt="Probabilités estimées pour chacune des classes de maturité")
+                if not is_banana:
+                    st.error(
+                        f"Le détecteur reconnaît plutôt « {top_category} » qu’une banane. "
+                        f"Aucun stade de maturité n’a été prédit (score banane : {banana_score:.1%}). "
+                        "Essaie avec une photo où la banane occupe davantage le cadre.",
+                        title="Image refusée · banane non détectée",
+                    )
+                else:
+                    st.success(f"Banane détectée · rang ImageNet {banana_rank}/1000", icon=":material/check_circle:")
+                    model, metadata, image_transform = get_image_model()
+                    label, probabilities = predict_pil_image(image, model, metadata, image_transform)
+                    st.subheader("Estimation de maturité")
+                    st.metric("Classe estimée", label)
+                    st.metric("Confiance du classifieur", f"{probabilities.max():.1%}")
+                    prob_fig = go.Figure(go.Bar(
+                        x=probabilities * 100,
+                        y=metadata["classes"],
+                        orientation="h",
+                        marker_color=[BANANA if name == label else "#DCCFBD" for name in metadata["classes"]],
+                        text=[f"{value:.1f}%" for value in probabilities * 100],
+                        textposition="outside",
+                    ))
+                    prob_fig.update_layout(title="Probabilités par stade de maturité", xaxis_title="Probabilité (%)", yaxis_title="", xaxis_range=[0, 110])
+                    st.plotly_chart(chart_layout(prob_fig, 280), width="stretch", alt="Probabilités de maturité estimées pour chacune des quatre classes de banane")
         except Exception as error:
             st.error(f"Impossible d’analyser cette image : {error}")
 

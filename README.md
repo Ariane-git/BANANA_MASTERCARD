@@ -2,7 +2,7 @@
 
 Application de démonstration réunissant deux sujets :
 
-- **Bananes** : analyse exploratoire et classification d'images par un ResNet18 avec transfert d'apprentissage.
+- **Bananes** : analyse exploratoire, filtre « banane ou autre objet » avec MobileNetV3/ImageNet, puis classification de maturité par ResNet18.
 - **Mastercard (MA)** : comparaison et prévision du cours avec NeuralProphet, sur le calendrier des séances NYSE.
 
 ## Déployer sur Streamlit Community Cloud
@@ -12,7 +12,7 @@ Application de démonstration réunissant deux sujets :
 3. Choisir Python 3.11 dans les paramètres de déploiement.
 4. Déployer. Les modèles et les petits artefacts nécessaires sont déjà versionnés dans `models/` et `artifacts/`.
 
-Le jeu complet de 13 478 images n'est pas inclus. Les statistiques EDA sont lues depuis `artifacts/eda_summary.json` et quatre images exemples sont fournies dans `assets/samples/`. La classification reste interactive via le téléversement d'une image.
+Le jeu complet de 13 478 images n'est pas inclus. Les statistiques EDA sont lues depuis `artifacts/eda_summary.json` et quatre images exemples sont fournies dans `assets/samples/`. La classification reste interactive via le téléversement d'une image. Un détecteur préentraîné vérifie d'abord que la photo semble contenir une banane ; s'il ne la détecte pas, aucun stade n'est prédit.
 
 ## Déploiement local
 
@@ -30,6 +30,7 @@ Les prévisions boursières utilisent le modèle NeuralProphet exporté et l'his
 
 - `app.py`, `src/`, `.streamlit/config.toml` : application et configuration visuelle.
 - `models/image_model.pt`, `models/image_metadata.json` : modèle d'image utilisé en prédiction.
+- `models/banana_gate_mobilenet_v3_small.pth` : poids du détecteur qui filtre les photos sans banane.
 - `models/mastercard_neuralprophet.np` : modèle de prévision boursière.
 - `artifacts/` : statistiques EDA, métriques et séries de validation/prévision affichées par l'application.
 - `assets/samples/` : une image d'exemple pour chacune des quatre classes.
